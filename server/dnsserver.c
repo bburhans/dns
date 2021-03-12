@@ -184,7 +184,7 @@ struct header {
 };
 
 struct question {
-    char * name;
+    char * qname;
     uint16_t qtype;
     uint16_t qclass;
 };
@@ -195,9 +195,9 @@ struct pointer {
 };
 
 struct message {
-    // Note: inverse queries (opcode = IQUERY) ask by populating the answer, not the question! Jeopardy-style. RIP Alex Trebek.
+    // Note: inverse queries (opcode = IQUERY) work by populating the answer, not the question! Jeopardy-style. RIP Alex Trebek.
     struct header header;
-    struct question question;
+    struct question * question;
     struct rr * answer;
     struct rr * authority;
     struct rr * additional;
@@ -221,6 +221,18 @@ unsigned char * install_domain_name(unsigned char *p, char *domain_name)
         p++;
     }
     return p + 1;
+}
+
+// Return -1 on success, or the source offset of the error otherwise
+int deserialize(unsigned char * workspace, struct message * message)
+{
+    memcpy(&message->header, workspace, sizeof(uint16_t) * 6);
+    struct header * header = &message->header;
+    struct question * question = (struct question *)malloc(sizeof(struct question)
+        * ntohs(header->qdcount));
+    printf("ID %u\nQR %u\nOPCODE %u\nQDCOUNT %u\n", header->id, header->qr, header->opcode, ntohs(header->qdcount));
+    free(question);
+    return -1;
 }
 
 int main( int argc, char **argv )
@@ -277,12 +289,21 @@ int main( int argc, char **argv )
         uint16_t client_port = ntohs(client_address.sin_port);
         printf("client: %s:%u\n", ipv4_addr, client_port);
 
-        struct message request;
+        struct message * message = (struct message *)malloc(sizeof(struct message));
+        int errorpos = deserialize(workspace, message);
+        if (errorpos == -1) {
+            printf("message seems valid so far\n");
+        }
+        else {
+            printf("message invalid at position %d\n", errorpos);
+        }
+        
 
         // +++ Construct reply. Use an IP address of 127.0.0.1 for all domain names
         //     FUTURE ENHANCEMENT: Look up IP addresses from a database.
 
         // +++ Send reply to client.
+        free(message);
     }
 
     return EXIT_SUCCESS;
