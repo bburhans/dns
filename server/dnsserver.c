@@ -223,21 +223,66 @@ unsigned char * install_domain_name(unsigned char *p, char *domain_name)
     return p + 1;
 }
 
-// Return -1 on success, or the source offset of the error otherwise
+unsigned char * parse_domain_name(unsigned char *dest, char *source) {
+    int count = 0;
+    while(source[count] != 0) {
+        memcpy(dest+count, source+count+1, source[count]);
+        count += source[count];
+        dest[count] = '.';
+        count++;
+    }
+    dest[count - 1] = '\0';
+    return dest;
+}
+
+void hd (void * memory, int length){
+    // hexdump function for debugging the workspace
+    const unsigned char * c = (const unsigned char *)memory;
+    for (int i = 0; i < length; i++) {
+        fprintf(stderr, "[%u]0x%.2x('%c') ", i, c[i], c[i] < ' ' ? '\0' : c[i]);
+    }
+    fprintf(stderr, "\n");
+}
+
+// Returns -1 on success, or the source offset of the error otherwise
 int deserialize(unsigned char * workspace, struct message * message)
 {
-    memcpy(&message->header, workspace, sizeof(uint16_t) * 6);
+    const int header_length = 16 * 6 / 8;
+    // memcpy(&message->header, workspace, header_length);
+    message->header.id = *(uint16_t *)workspace;
+    message->header.qr = *(uint16_t *)(workspace+2)>>7;
+    message->header.opcode = *(uint16_t *)(workspace+2)>>3;
+    message->header.aa = *(uint16_t *)(workspace+2)>>2;
+    message->header.tc = *(uint16_t *)(workspace+2)>>1;
+    message->header.rd = *(uint16_t *)(workspace+2);
+    message->header.ra = *(uint16_t *)(workspace+3)>>7;
+    message->header.z = *(uint16_t *)(workspace+3)>>4;
+    message->header.rcode = *(uint16_t *)(workspace+3);
+    message->header.qdcount = *(uint16_t *)(workspace+4);
+    message->header.ancount = *(uint16_t *)(workspace+6);
+    message->header.nscount = *(uint16_t *)(workspace+8);
+    message->header.arcount = *(uint16_t *)(workspace+10);
     struct header * header = &message->header;
-    struct question * question = (struct question *)malloc(sizeof(struct question)
-        * ntohs(header->qdcount));
-    printf("ID %u\nQR %u\nOPCODE %u\nQDCOUNT %u\n", header->id, header->qr, header->opcode, ntohs(header->qdcount));
-    free(question);
+    uint16_t qdcount = ntohs(header->qdcount);
+    printf("ID %u\nQR %u\nOPCODE %u\nQDCOUNT %u\n", ntohs(header->id), header->qr, header->opcode, qdcount);
+
+    struct question * question = (struct question *)malloc(sizeof(struct question) * qdcount);
+    message->question = question;
+    char * p = (char *)workspace + header_length;
+    for (int i = 0; i < qdcount; i++) {
+        int qname_length = strlen(p) + 1;
+        char * qname = (char *)malloc(qname_length);
+        strcpy(qname, p);
+        question[i].qname = qname;
+        question[i].qtype = *(uint16_t *)(p += qname_length);
+        question[i].qclass = *(uint16_t *)(p += 2);
+    }
     return -1;
 }
 
 int main( int argc, char **argv )
 {
-    // Some socket and "workspace" boilerplate code is from pchapin's dnsclient.c and echoserver.c.
+    // Some socket boilerplate code is from pchapin's dnsclient.c and/or echoserver.c.
 
     // +++ Set up the UDP socket
     int socket_handle;
@@ -297,12 +342,28 @@ int main( int argc, char **argv )
         else {
             printf("message invalid at position %d\n", errorpos);
         }
+
+        unsigned char domain[255];
+        for (int i = 0; i < ntohs(message->header.qdcount); i++) {
+            printf("question found:\n\tQNAME=%s\n\tQTYPE=%u\n\tQCLASS=%u\n",
+                parse_domain_name(domain, message->question[i].qname),
+                ntohs(message->question[i].qtype),
+                ntohs(message->question[i].qclass)
+            );
+            free(message->question[i].qname);
+        }
         
 
         // +++ Construct reply. Use an IP address of 127.0.0.1 for all domain names
         //     FUTURE ENHANCEMENT: Look up IP addresses from a database.
 
         // +++ Send reply to client.
+
+        // foreach qdcount, free question[qdcount].qname
+        for (int i = 0; i < message->header.qdcount; i++) {
+            // free(message->question[i].qname);
+        }
+        free(message->question);
         free(message);
     }
 
