@@ -307,6 +307,7 @@ int main( int argc, char **argv )
     while( 1 ) {
         // +++ Receive a request from a client.
         
+        unsigned char rcode = 0;
         struct sockaddr_in client_address;
         socklen_t client_address_length = sizeof( client_address );
         int rc = recvfrom(
@@ -341,6 +342,7 @@ int main( int argc, char **argv )
         }
         else {
             printf("message invalid at position %d\n", errorpos);
+            rcode = 0b1;
         }
 
         unsigned char domain[255];
@@ -350,7 +352,6 @@ int main( int argc, char **argv )
                 ntohs(message->question[i].qtype),
                 ntohs(message->question[i].qclass)
             );
-            free(message->question[i].qname);
         }
         
 
@@ -359,9 +360,40 @@ int main( int argc, char **argv )
 
         // +++ Send reply to client.
 
+        *(workspace+2) |= 0b10000000; // qr, opcode, a, tc, rd
+        *(workspace+3) = 0b00000000 | rcode; //ra, z, rcode
+        memcpy(workspace+6, workspace+4, 2); //ancount = qdcount
+        
+        uint16_t qdcount = ntohs(message->header.qdcount);
+        
+        unsigned char * p = workspace + 12;
+        unsigned char * q[64]; // question boundary addresses
+        q[0] = p;
+        for (int i = 0; i < qdcount; i++) {
+            int qname_length = strlen(p) + 1; // name and its null terminator
+            p += qname_length + 4; // skip over qname, qtype, and qclass
+            q[i+1] = p;
+        }
+        memset(p, 0, workspace + 512 - p); // zero out answers, authorities, and additionals
+        for (int i = 0; i < qdcount; i++) {
+            memcpy(p, q[i], q[i+1] - q[i]); // copy question before each answer
+            p += q[i+1] - q[i];
+            // Append answer ttl, rdlength, and rdata
+            // TODO: make this dynamic for varying record sizes
+            // TODO: add bounds checking against workspace+512
+            memset(p, 0, 32/8); // no ttl, do not cache
+            p += 32/8;
+            *p++ = 0; *p++ = 4; // rdlength: 4 octet IPv4 addr is next
+            inet_pton(AF_INET, "127.0.0.1", p);
+            p+=4;
+        }
+        // hd(workspace, 512);
+        // fwrite(workspace, 1, 512, stderr); // dump the workspace to stderr/disk to be more easily inspected with hexdump
+        rc = sendto(socket_handle, workspace, 512, 0, (struct sockaddr *)&client_address, client_address_length);
+
         // foreach qdcount, free question[qdcount].qname
         for (int i = 0; i < message->header.qdcount; i++) {
-            // free(message->question[i].qname);
+            free(message->question[i].qname);
         }
         free(message->question);
         free(message);
